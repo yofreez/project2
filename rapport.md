@@ -643,5 +643,135 @@ Les tests réalisés montrent :
 - Un test négatif sans nouvelle alerte.
 - Des alertes de niveau 10 visibles dans le dashboard.
 
----
+
+# J2 
+
+# Rapport d'avancement — Mini-SOC Wazuh, Sysmon et Sigma
+
+**Date : 10 novembre 2026**  
+**Objectif : Détecter Lumma Stealer et RedLine Stealer avec Wazuh et nos règles Sigma.**
+
+## 1. Préparation de la VM Windows
+
+Nous avons configuré `windows-malware-lab` pour les analyses et créé une sauvegarde du disque, de l'UEFI, du TPM et de la configuration libvirt.
+
+**Vérification des périphériques :**
+
+```bash
+sudo virsh dumpxml windows-malware-lab
+```
+
+**Vérification de la sauvegarde du disque :**
+
+```bash
+sudo qemu-img check \
+  ~/VMs/windows-malware-lab-baseline/windows-malware-lab.qcow2
+```
+
+**Résultat :** sauvegarde créée et disque QCOW2 vérifié sans erreur.
+
+## 2. Vérification de Sysmon
+
+Dans la VM Windows, nous avons confirmé que Sysmon fonctionnait et enregistrait les événements système.
+
+```powershell
+Get-Service Sysmon64
+```
+
+```powershell
+Get-WinEvent -LogName Microsoft-Windows-Sysmon/Operational -MaxEvents 3
+```
+
+Nous avons également extrait le journal EVTX depuis Fedora pour permettre une analyse hors ligne.
+
+**Résultat :** événements Sysmon ID 1 et ID 11 observés.
+
+## 3. Préparation de l'échantillon RedLine
+
+
+
+Nous avons téléchargé une archive RedLine depuis MalwareBazaar, vérifié son intégrité et confirmé son SHA-256.
+
+```bash
+7z t -pinfected ~/projet-stealer/echantillons-quarantaine/d05986e4*.zip
+```
+
+**Vérification SHA-256 :**
+
+```bash
+set -o pipefail
+7z x -so -pinfected ~/projet-stealer/echantillons-quarantaine/d05986e4*.zip | sha256sum
+```
+
+**Résultat :** échantillon RedLine authentifié.
+
+## 4. Configuration du réseau isolé
+IA 3  
+
+Nous avons créé `soc-isole`, un réseau libvirt sans NAT ni DHCP, et configuré la zone de pare-feu `soc-malware`.
+
+**Vérification du réseau :**
+
+```bash
+sudo virsh net-dumpxml soc-isole
+```
+
+**Vérification du pare-feu :**
+
+```bash
+sudo firewall-cmd --zone=soc-malware --list-all
+```
+
+**Résultat :** zone `DROP` active sur `virbr-soc` et principaux chemins routés bloqués.
+
+## 5. Capture réseau depuis Windows
+
+Nous avons configuré Windows avec l'adresse `10.77.77.10` et vérifié la capture des paquets.
+
+**Capture avec tcpdump :**
+
+```bash
+sudo tcpdump -i virbr-soc -nn -s 0 \
+  -w ~/projet-stealer/captures/windows-http-test.pcap
+```
+
+**Analyse avec tshark :**
+
+```bash
+tshark -r ~/projet-stealer/captures/windows-http-test.pcap \
+  -Y "arp or icmp"
+```
+
+**Résultat :** 15 paquets capturés, confirmant que le trafic de Windows est observable.
+
+## 6. Validation de la règle Sigma RedLine
+
+Nous avons identifié les opérations SOAP dans les captures réelles RedLine :
+
+- `CheckConnect`
+- `EnvironmentSettings`
+- `SetEnvironment`
+- `GetUpdates`
+
+**Extraction des en-têtes HTTP :**
+
+```bash
+tshark -r ~/projet-stealer/pcap/redline01.pcap \
+  -Y 'http.request && http contains "SOAPAction"' \
+  -T fields -e frame.number -e http.request.line
+```
+
+**Réinjection des événements dans Wazuh :**
+
+```bash
+cat /var/ossec/logs/lab/redline-wazuh.jsonl \
+  >> /var/ossec/logs/lab/redline-stream.jsonl
+```
+
+**Vérification des alertes :**
+
+```bash
+grep '"100153"' /var/ossec/logs/alerts/alerts.json | tail -n 2
+```
+
 
