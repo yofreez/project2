@@ -775,3 +775,188 @@ grep '"100153"' /var/ossec/logs/alerts/alerts.json | tail -n 2
 ```
 
 
+---
+
+## J3
+
+## 1. Architecture du laboratoire
+
+Le laboratoire repose sur un hôte Fedora Linux utilisant KVM/libvirt pour la virtualisation et firewalld pour la gestion du pare-feu.
+
+
+
+### Configuration de Windows Malware Lab
+
+IA 4 -> utilisé pour m'aider a verifier mes connexion et m'aider à essyer de lancer les stealers
+
+Initialement, la machine Windows disposait uniquement d'une carte réseau connectée à `soc-isole`, sans accès Internet.
+
+Une deuxième interface réseau a été ajoutée afin de permettre les communications Internet tout en conservant la connexion au réseau SOC.
+
+Configuration obtenue :
+
+- **vnet6 :** réseau `soc-isole` (10.77.77.0/24).
+- **vnet7 :** réseau `default` (192.168.122.0/24), accès Internet via NAT.
+
+Le réseau SOC ne possède ni NAT ni DHCP.
+
+**Limite de sécurité :** cette configuration permet à Windows de communiquer avec le réseau NAT où se trouve également Wazuh. Elle n'assure donc pas une isolation complète du malware.
+
+---
+
+## 2. Objectifs de l'analyse
+
+L'objectif principal est d'observer le comportement réseau de RedLine Stealer dans un environnement virtualisé.
+
+Les recherches portent notamment sur :
+
+- Les tentatives de communication vers les serveurs C2.
+- Les adresses IP et ports utilisés.
+- Les échanges réseau suspects.
+- La présence éventuelle d'en-têtes HTTP `SOAPAction`.
+- La capacité des règles Wazuh à détecter ces comportements.
+
+---
+
+## 3. Manipulations effectuées
+
+### 3.1 Configuration du réseau
+
+Vérification des réseaux libvirt :
+
+```bash
+sudo virsh net-list --all
+```
+
+Vérification des interfaces de la VM :
+
+```bash
+sudo virsh domiflist windows-malware-lab
+```
+
+Ajout d'une deuxième carte réseau sur le NAT `default` :
+
+```bash
+sudo virsh attach-interface \
+  --domain windows-malware-lab \
+  --type network \
+  --source default \
+  --model e1000e \
+  --config \
+  --live
+```
+
+Cette modification permet de conserver le réseau SOC tout en ajoutant une connexion Internet.
+
+### 3.2 Captures réseau
+
+Plusieurs captures ont été réalisées avec `tcpdump`.
+
+Première capture sur le réseau SOC :
+
+```bash
+sudo tcpdump -i virbr-soc -nn -s 0 \
+  -w redline-execution.pcap
+```
+
+Cette capture contenait principalement du trafic local Windows (NetBIOS, LLMNR, mDNS).
+
+Elle n'était pas suffisante pour observer les tentatives de communication C2 passant par le réseau NAT.
+
+De nouvelles captures ont ensuite été réalisées directement sur les interfaces virtuelles de Windows :
+
+**Réseau Internet :**
+
+```bash
+sudo tcpdump -i vnet7 -nn -s 0 \
+  -w redline-internet.pcap
+```
+
+**Réseau SOC :**
+
+```bash
+sudo tcpdump -i vnet6 -nn -s 0 \
+  -w redline-soc.pcap
+```
+
+Ces captures ont permis de mieux distinguer le trafic Internet des communications internes.
+
+---
+
+## 4. Résultats obtenus
+
+### 4.1 Tentatives de communication C2
+
+L'analyse des fichiers PCAP a révélé des tentatives de connexion TCP vers deux destinations suspectes :
+
+| Adresse IP | Port | Résultat |
+|---|---|---|
+| 185.92.148.234 | 28092 | Tentatives TCP sans connexion établie observée |
+| 85.17.151.21 | 55615 | Tentatives TCP répétées, avec réponses RST |
+
+Ces destinations ont été relevées comme indicateurs potentiellement associés à RedLine Stealer.
+
+Plusieurs paquets TCP SYN ont été observés, mais les captures ne montrent pas d'établissement réussi de session avec ces destinations.
+
+### 4.2 Communications avec Wazuh
+
+Des communications entre Windows et le serveur Wazuh ont également été observées.
+
+- **Source :** 192.168.122.11
+- **Destination :** 192.168.122.207
+- **Port :** 1514
+
+Le trafic contient des données chiffrées associées aux communications de l'agent Wazuh.
+
+Cela confirme la présence d'échanges réseau avec le serveur de supervision, sans permettre d'en déduire directement le contenu des événements.
+
+### 4.3 Recherche des SOAPAction
+
+Les captures ont été examinées afin de rechercher :
+
+- `SOAPAction:`
+- `soap:Envelope`
+- `application/soap+xml`
+- `schemas.xmlsoap.org`
+
+**Résultat : aucune SOAPAction identifiable en clair n'a été observée.**
+
+Les règles Wazuh prévues pour cette détection n'ont donc pas pu être validées à partir de ces captures.
+
+---
+
+## 5. Difficultés rencontrées
+
+### Capture initiale incomplète
+
+La première capture était réalisée uniquement sur `virbr-soc`.
+
+Or, après ajout de l'accès Internet, les communications externes de Windows passent par le réseau NAT `default`.
+
+**Solution :** réaliser des captures sur `vnet7`, l'interface Internet de la VM.
+
+### Connexions C2 non établies
+
+Les tentatives vers les destinations C2 suspectées n'ont pas abouti à une session TCP établie dans les captures étudiées.
+
+Plusieurs explications sont possibles :
+
+- Serveur C2 inactif ou supprimé.
+- Service distant indisponible.
+- Connexion refusée.
+- Filtrage réseau ou pare-feu.
+
+L'hypothèse d'un C2 devenu inaccessible est cohérente avec les observations, mais reste non confirmée.
+
+### Absence de SOAPAction
+
+Aucune communication SOAP identifiable n'a été observée.
+
+L'échec des connexions C2 pourrait expliquer l'absence d'échanges applicatifs, mais il n'est pas démontré que cet échantillon utilise nécessairement des SOAPAction.
+
+L'absence de détection ne permet donc pas de conclure à un mauvais fonctionnement des règles Wazuh.
+
+---
+
+
+

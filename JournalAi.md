@@ -28,3 +28,12 @@ Vérification : utilisation de `virsh net-dumpxml soc-isole` et `firewall-cmd --
 Résultat : zone `DROP` active sur `virbr-soc` et principaux chemins routés bloqués, selon les vérifications réalisées.
 
 Commit  : commit avancement 2 ( voir le rapport  ia 3)
+
+
+ChatGPT · Configuration réseau du laboratoire 
+
+Demande : Configurer un réseau isolé sous Fedora avec KVM/libvirt pour analyser RedLine Stealer, tout en permettant la supervision avec Wazuh et la capture du trafic réseau.
+Gardé : La séparation entre `soc-isole` (10.77.77.0/24), sans NAT ni DHCP, et `default` (192.168.122.0/24), avec NAT. L'utilisation de deux interfaces réseau sur Windows et des captures `tcpdump`.
+Corrigé : La capture initiale sur `virbr-soc` ne permettait pas de surveiller les connexions Internet du malware. La capture a donc été déplacée sur `vnet7`, l'interface NAT de Windows.
+Rejeté : L'utilisation exclusive du réseau isolé, qui empêchait l'observation des tentatives de communication vers les serveurs C2.
+Commit : commit avancement 3 ( voir le rapport  ia 4)
