@@ -960,3 +960,61 @@ L'absence de détection ne permet donc pas de conclure à un mauvais fonctionnem
 
 
 
+
+# J4
+
+## 1. Validation des détections
+
+Nous avons retrouvé dans les archives Wazuh les alertes générées par nos règles Sigma :
+
+- **Lumma Stealer — règle `100152` :** 2 alertes historiques retrouvées.
+- **RedLine Stealer — règle `100153` :** 9 alertes historiques retrouvées.
+
+Les détections reposent sur des simulations Sysmon pour Lumma et sur des traces HTTP issues des PCAP pour RedLine.
+
+## 2. Configuration d'Active Response
+
+Nous avons mis en place un script personnalisé `soc-remediation.sh`, chargé de réagir automatiquement aux détections Lumma et RedLine.
+
+Le script a été déclaré dans `/var/ossec/etc/ossec.conf`, avec des déclencheurs séparés pour les règles `100152` et `100153`.
+
+**Vérification de la configuration :**
+
+```bash
+/var/ossec/bin/wazuh-analysisd -t
+```
+
+**Résultat :** configuration validée et service Wazuh opérationnel.
+
+## 3. Validation de la réponse automatique
+
+Nous avons testé le déclenchement d'Active Response avec nos deux règles Sigma.
+
+- **RedLine :** réinjection des événements HTTP du PCAP, puis déclenchement automatique du script.
+- **Lumma :** simulation bénigne d'un processus suspect sur Windows, détectée par Sysmon et Wazuh.
+
+**Vérification des décisions :**
+
+```bash
+tail -n 2 /var/ossec/logs/soc-decisions.log
+```
+
+**Résultats :**
+
+```text
+regle=100153 agent=000 confinement=NON APPLICABLE
+regle=100152 agent=001 confinement=SIMULATION
+```
+
+Le script distingue les alertes provenant du serveur Wazuh de celles provenant d'un agent Windows.
+
+## 4. Préparation de la remédiation
+
+Nous avons ajouté une logique de confinement simulé afin de préparer les futures actions de réponse.
+
+- Identification de la règle Sigma déclenchée.
+- Identification de l'agent concerné.
+- Journalisation automatique de la décision.
+- Protection du serveur Wazuh contre un confinement accidentel.
+
+**Résultat :** les décisions de remédiation sont automatisées, mais aucune action destructive ou coupure réseau n'a encore été effectuée.
